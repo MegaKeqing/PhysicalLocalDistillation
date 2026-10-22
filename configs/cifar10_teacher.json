@@ -1,0 +1,42 @@
+{
+  "task": "teacher",
+  "seed": 51001,
+  "device": "cuda:0",
+  "threads": 4,
+  "output_dir": "checkpoint/teacher_model/cifar10",
+  "data": {
+    "dataset": "cifar10",
+    "root": "../dataset",
+    "size": 32,
+    "batch_size": 32,
+    "valid_size": 10000,
+    "download": false,
+    "num_workers": 2,
+    "pin_memory": false,
+    "augmentation": [
+      "horizontal_flip",
+      "vertical_flip",
+      "crop"
+    ],
+    "shuffle_seed": 51101
+  },
+  "training": {
+    "epochs": 200,
+    "learning_rate": 0.001,
+    "weight_decay": 0.01,
+    "early_stopping": null
+  },
+  "model": {
+    "type": "cnn",
+    "init_seed": 51201,
+    "channels": [
+      32,
+      64,
+      128,
+      256
+    ],
+    "num_classes": 10,
+    "dropout": 0.2,
+    "sigmoid": true
+  }
+}

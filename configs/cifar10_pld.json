@@ -1,0 +1,67 @@
+{
+  "task": "pld",
+  "seed": 61501,
+  "device": "cuda:0",
+  "threads": 4,
+  "output_dir": "result/cifar10_pld",
+  "data": {
+    "dataset": "cifar10",
+    "root": "../dataset",
+    "size": 32,
+    "batch_size": 64,
+    "valid_size": 10000,
+    "download": false,
+    "num_workers": 4,
+    "pin_memory": true,
+    "augmentation": [],
+    "shuffle_seed": 61601
+  },
+  "training": {
+    "epochs": 100,
+    "learning_rate": 0.001,
+    "weight_decay": 0.01,
+    "early_stopping": {
+      "min_epochs": 20,
+      "patience": 10
+    }
+  },
+  "model": {
+    "type": "dpnn",
+    "init_seed": 61701,
+    "tm_seed": 61801,
+    "size": 32,
+    "num_blocks": 2,
+    "num_classes": 10,
+    "encoding_alpha": 1.0,
+    "layer_norm_eps": 1e-05,
+    "bias": true,
+    "dropout": 0.0
+  },
+  "pld": {
+    "teacher_checkpoint": "checkpoint/teacher_model/cifar10/best.pt",
+    "mapping": [
+      1,
+      5,
+      6
+    ],
+    "projection_seed": 61901,
+    "losses": [
+      {
+        "type": "pmse",
+        "weight": 1.0,
+        "bias": false
+      },
+      {
+        "type": "pmse",
+        "weight": 1.0,
+        "bias": false
+      },
+      {
+        "type": "kl_ce",
+        "weight": 0.5,
+        "label_weight": 0.5,
+        "temperature": 3.0
+      }
+    ]
+  }
+}

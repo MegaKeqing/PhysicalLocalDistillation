@@ -1,0 +1,40 @@
+{
+  "task": "bp",
+  "seed": 62001,
+  "device": "cuda:0",
+  "threads": 4,
+  "output_dir": "result/fmnist_bp",
+  "data": {
+    "dataset": "fmnist",
+    "root": "../dataset",
+    "size": 32,
+    "batch_size": 64,
+    "valid_size": 10000,
+    "download": false,
+    "num_workers": 4,
+    "pin_memory": true,
+    "augmentation": [],
+    "shuffle_seed": 62101
+  },
+  "training": {
+    "epochs": 100,
+    "learning_rate": 0.001,
+    "weight_decay": 0.01,
+    "early_stopping": {
+      "min_epochs": 20,
+      "patience": 10
+    }
+  },
+  "model": {
+    "type": "dpnn",
+    "init_seed": 62201,
+    "tm_seed": 62301,
+    "size": 32,
+    "num_blocks": 2,
+    "num_classes": 10,
+    "encoding_alpha": 1.0,
+    "layer_norm_eps": 1e-05,
+    "bias": true,
+    "dropout": 0.0
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "task": "pld",
+  "seed": 64501,
+  "device": "cuda:0",
+  "threads": 4,
+  "output_dir": "result/mnist_mlp_pld",
+  "data": {
+    "dataset": "mnist",
+    "root": "../dataset",
+    "size": 32,
+    "batch_size": 64,
+    "valid_size": 10000,
+    "download": false,
+    "num_workers": 4,
+    "pin_memory": true,
+    "augmentation": [],
+    "shuffle_seed": 64601
+  },
+  "training": {
+    "epochs": 100,
+    "learning_rate": 0.001,
+    "weight_decay": 0.01,
+    "early_stopping": {
+      "min_epochs": 20,
+      "patience": 10
+    }
+  },
+  "model": {
+    "type": "mlp",
+    "init_seed": 64751,
+    "size": 32,
+    "hidden_dims": [
+      1024,
+      1024
+    ],
+    "num_classes": 10,
+    "dropout": 0.0
+  },
+  "pld": {
+    "teacher_checkpoint": "checkpoint/teacher_model/mnist/best.pt",
+    "mapping": [
+      1,
+      5,
+      6
+    ],
+    "projection_seed": 64901,
+    "losses": [
+      {
+        "type": "pmse",
+        "weight": 1.0,
+        "bias": false
+      },
+      {
+        "type": "pmse",
+        "weight": 1.0,
+        "bias": false
+      },
+      {
+        "type": "kl_ce",
+        "weight": 0.5,
+        "label_weight": 0.5,
+        "temperature": 3.0
+      }
+    ]
+  }
+}
