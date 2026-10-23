@@ -1,6 +1,6 @@
 # 配置说明
 
-main.py 只接受 JSON，不依赖私有配置或预训练权重。先用 `<dataset>_teacher.json` 训练 CNN 教师，
+main.py 使用 JSON 配置。先用 `<dataset>_teacher.json` 训练 CNN 教师，
 再用同数据集的 _pld.json 或 _mlp_pld.json 蒸馏；_bp.json 不需要教师。
 CIFAR-10/Fashion-MNIST 也可使用 README 中的已训练教师附件，放入配置指定的路径后直接蒸馏。
 dataset 可取 cifar10、fmnist、mnist。修改配置后属于新的运行条件，应使用新的输出目录。
@@ -9,7 +9,7 @@ dataset 可取 cifar10、fmnist、mnist。修改配置后属于新的运行条�
 
 | 字段 | 类型、含义 |
 |---|---|
-| task | teacher、bp 或 pld；前两者都使用全网络交叉熵 BP |
+| task | teacher、bp、pld、pld-seq 或 ti-pld；前两者使用全网络交叉熵 BP |
 | seed | 全局整数种子，范围 [0, 2^32) |
 | device | cpu 或 cuda:0 等 PyTorch 设备名 |
 | threads | PyTorch CPU 线程数，默认 4 |
@@ -19,7 +19,7 @@ dataset 可取 cifar10、fmnist、mnist。修改配置后属于新的运行条�
 
 相对路径以项目根目录为基准，绝对路径保持其位置。--output 覆盖本次输出位置，
 不改变保存的原始 JSON 或其他配置中的教师路径。--check-epochs N 限制本次检查轮数，
-不修改 JSON，不评估测试集；N 必须在 1 到 training.epochs 之间。
+仅适用于 teacher、bp、pld；不修改 JSON，不评估测试集，N 必须在 1 到 training.epochs 之间。
 
 ## data
 
@@ -76,7 +76,8 @@ MLP 每个隐藏块使用 LayerNorm、Linear、ReLU、Dropout，最后为 Linear
 | early_stopping | null 表示关闭，否则必须包含 min_epochs 和 patience 两个正整数 |
 
 AdamW 使用 betas=(0.9,0.999)、eps=1e-8，无学习率调度或混合精度。
-验证准确率严格增大时才保存 best.pt；持平不会替换最优权重。
+teacher、bp、pld 按验证准确率严格增大保存 best.pt；持平不会替换最优权重。
+阶段训练的隐藏层按验证局部损失严格减小选模，分类头按验证准确率严格增大选模。
 达到 min_epochs 且距最佳轮数至少 patience 轮时停止。
 前 N 轮检查也保留此规则；若提前停止不足 N 轮，重复性检查不会通过。
 完整训练只在结束后用验证最优模型评估一次官方测试集。
@@ -93,7 +94,8 @@ AdamW 使用 betas=(0.9,0.999)、eps=1e-8，无学习率调度或混合精度。
 默认两块学生加分类头共三块，教师默认七块，mapping=[1,5,6]：
 第一光学/隐藏块对齐教师第二卷积块，第二块对齐教师隐藏分类块，学生分类头对齐教师 logits。
 教师和学生的 dataset、size、valid_size 必须一致；教师增强可不同。
-不会缓存教师特征或把教师特征作为学生下一块输入。
+task=pld 时教师在线提供目标，不缓存教师特征，也不把教师特征作为学生下一块输入；
+pld-seq 和 ti-pld 的缓存、注入及选模规则见下文“阶段训练配置”。
 
 每个 losses 对象含 type 与对应选项；不支持的选项会报错：
 
@@ -113,6 +115,31 @@ CKA 先对样本特征按批次中心化，用样本 Gram 计算相似度，分�
 MI 用按样本数缩放的余弦 Gram；联合核经迹归一化，特征值分解加 1e-8 对角抖动。
 alpha=null 使用 Shannon 熵（nat）；正数 alpha 且 |alpha−1|>=1e-3 使用 Rényi 熵（bit）。
 零或近零特征导致 Gram 迹偏离 1 时会提示。MI 是有限样本代理量，不是绝对互信息测量。
+
+## 阶段训练配置
+
+新增 cifar10_pld_seq.json 与 cifar10_ti_pld.json；通用字段和数据划分与现有示例相同。
+
+| 字段或条件 | pld-seq | ti-pld |
+|---|---|---|
+| 教师 | CNN，默认已训练 CIFAR-10 教师 | 同构 DPNN，默认由 CNN 联合 PLD 蒸馏得到的学生 |
+| 学生 | DPNN | 与教师同构、散射矩阵不同的 DPNN，至少两个光学块 |
+| mapping | 默认 [1,5,6]，允许维度不同 | 同构逐层对应，默认 [0,1,2] |
+| 隐藏层 losses | 必须 pmse | 必须 mse，无投影 |
+| 分类头 losses | kl_ce | kl_ce |
+| data.augmentation | 必须 [] | 必须 [] |
+| training.epochs | 每个阶段的最大轮数 | 每个阶段的最大轮数 |
+| early_stopping | 每个阶段独立计数 | 每个阶段独立计数 |
+| 隐藏层选模 | 最小验证局部损失 | 最小教师注入验证局部损失 |
+| 分类头选模 | 最大学生链验证准确率 | 最大教师注入验证准确率 |
+| 测试 | 使用学生链已缓存的最终特征 | 原始图像走完整学生链 |
+
+每个阶段恢复验证最优的数字层，以及 PLD-seq 的 PMSE 投影头，之后冻结；最终 best.pt 含各阶段最优的学生参数。
+散斑按样本预先生成，训练阶段不执行光学前向；TI-PLD 的所有隐藏层散斑在任意数字层更新前生成。
+分类头在 TI-PLD 中使用最后学生隐藏块作用于教师输入的输出，验证也遵循此规则。
+固定缓存上的数字训练使用单进程 DataLoader（num_workers=0，不锁页）；data.num_workers 和 pin_memory 用于最初的图像加载。
+epoch 不能解释为整个网络同时更新一轮；阶段训练的 history.csv 必须连同 stage 字段解读。
+--check-epochs 不支持这两种任务，不能将不同前序阶段状态下的后续 loss 用作逐位重复性比较。
 
 ## 示例范围与输出
 

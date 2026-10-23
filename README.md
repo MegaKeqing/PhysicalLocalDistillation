@@ -1,8 +1,8 @@
 # PhysicalLocalDistillation
 
-图像分类仿真的精简实现，包含相位编码 DPNN、定制 VGG 型 CNN、MLP、BP 和物理局部蒸馏（PLD）。
+图像分类仿真的精简实现，包含相位编码 DPNN、定制 VGG 型 CNN、MLP、BP、联合局部蒸馏（PLD）、逐层蒸馏（PLD-seq）和教师注入局部蒸馏（TI-PLD）。
 DPNN 执行相位编码、固定复高斯散射、强度探测和可训练数字变换，末端为独立分类头。
-支持 CIFAR-10、Fashion-MNIST（配置名 fmnist）和 MNIST；源码仓库不附带数据或训练结果，已训练教师通过 Release 附件提供。
+支持 CIFAR-10、Fashion-MNIST（配置名 fmnist）和 MNIST；源码仓库不附带数据或训练结果，已训练 CNN 教师通过 Release 附件提供。
 
 ## 安装
 
@@ -169,7 +169,7 @@ python main.py --config configs/cifar10_pld.json --check-epochs 5 --output resul
 其余用于训练；测试集采用官方划分。CIFAR-10 训练集为 40,000 张，另两个数据集为 50,000 张。
 训练增强顺序是灰度、缩放、转张量、配置中的增强、逐样本归一化；验证和测试不增强。
 
-示例学生使用两个光学块或两个 MLP 隐藏块，batch 64、AdamW lr=0.001、weight_decay=0.01，
+BP 和联合 PLD 的示例学生使用两个光学块或两个 MLP 隐藏块，batch 64、AdamW lr=0.001、weight_decay=0.01，
 最多 100 轮，至少 20 轮且连续 10 轮验证准确率未严格改善时停止。
 教师训练 200 轮、无早停；CIFAR-10 教师 batch 32、weight_decay=0.01，水平/垂直翻转和裁剪；
 Fashion-MNIST 教师 batch 64、weight_decay=0.0005，水平翻转和裁剪。
@@ -198,6 +198,58 @@ BP/PLD 的介质和初始化实例可以不同；单组准确率差异不能解�
 只验证前五轮 loss，不推断完整轨迹或最终权重逐位一致。短检查不评估测试集。
 MSE、CKA、MI 和 MLP 的核心数值/梯度检查不等同于完整准确率复现。
 
+## 固定散斑的阶段训练
+
+PLD-seq 和 TI-PLD 只支持 DPNN 学生，不使用随机数据增强。它们把固定光学段与可训练数字段分开：
+同一样本的散斑采集一次，之后每个 epoch 只训练数字层。当前代码模拟光学传播，不连接物理采集设备。
+
+CIFAR-10 的入口为：
+
+~~~bash
+python main.py --config configs/cifar10_pld_seq.json
+python main.py --config configs/cifar10_ti_pld.json
+~~~
+
+PLD-seq 需要已有的 CIFAR-10 CNN 教师。TI-PLD 默认使用
+`result/cifar10_pld/best.pt`：先按原有 teacher、pld 配置训练 CNN，再由 CNN 蒸馏出 DPNN，
+该 DPNN 用作 TI-PLD 教师。学生与 DPNN 教师结构相同，散射矩阵种子不同。
+这两个配置是独立的训练条件，不在 scripts/reproduce.py 的六项联合 PLD 队列中。
+Release 中的 CNN 教师可直接用于 PLD-seq；TI-PLD 所需的 DPNN 教师需先运行 cifar10_pld.json 生成，
+本仓库不提供该 DPNN 的预训练权重。
+
+**PLD-seq：** 采集 block 0 在 train/valid/test 上的散斑，以 PMSE 训练它的数字层和投影头；
+恢复该阶段验证最优状态，生成三个划分的学生特征 z0，再采集 block 1 的散斑。
+依次处理所有隐藏层，最后训练分类头。测试图像用于预先采集，但测试标签和指标不参与选模；
+测试只在所有阶段结束后计算一次，复用完整学生链已经生成的末端特征，避免再次采集。
+
+**TI-PLD：** 训练开始前，以图像 x 和教师前层特征分别作为各学生隐藏块的输入，
+只在 train/valid 上采集散斑。隐藏层用直接 MSE，不允许 PMSE 投影；
+每层训练与验证都使用对应的教师注入缓存，层与层之间没有训练依赖。
+所有隐藏层训练完成后，分类头以最后学生隐藏块作用于教师前层特征的输出为输入；
+两层情况下为 S1(z0_teacher)，不是教师最后隐藏特征。
+最终测试移除教师注入，让原始图像通过完整学生链。注入验证准确率与整链测试准确率的口径不同。
+
+两者隐藏阶段均按最小验证局部损失选模，分类头按最大验证准确率选模；
+每个阶段单独执行 training.epochs 预算和 early_stopping，恢复最优数字层及对应损失头后冻结。
+默认最多 100 轮、至少 20 轮、连续 10 轮未改善则停止，分类头使用 KL+交叉熵。
+阶段随机流分别使用 seed+stage，打乱使用 shuffle_seed+stage，按 2^32 取模。
+`--check-epochs` 不用于阶段训练，因为截短前一阶段会改变后一阶段的输入。
+
+新增输出包括逐阶段 `block_<stage>_best.pt`、带 stage 列的 history.csv、固定缓存 cache/、
+cache_manifest.json 和最终学生 best.pt。cache/ 保存散斑、阶段特征和 train/valid 教师目标；
+文件摘要与样本维度见 cache_manifest.json，实际学生光学样本数见 result.json 的 optical_measurements。
+这些均为本地运行产物，受 result/ 的忽略规则保护，不能纳入源码仓库。
+缓存使用 CPU float32，CIFAR-10 CNN 目标与多阶段缓存会占用数 GB 内存和磁盘；
+缓存数据按固定顺序收集，输入、目标、标签在同一个 TensorDataset 中联合打乱，尾批不会丢弃。
+
+~~~bash
+python -m tests.check_staged --device cpu
+python -m tests.check_staged --device cuda:0
+~~~
+
+检查包含散斑不重复采集、阶段验证语义、同构及散射限制、逐阶段最优状态恢复，
+以及合成小样本每阶段前五轮 loss 的逐位重复性。它们不替代完整数据集准确率验收。
+
 ## 输出与代码结构
 
 每次运行保存 config.json、manifest.json、history.csv、status.json 和验证最优 best.pt。
@@ -205,16 +257,18 @@ manifest 包含代码哈希、Git 信息、依赖环境及蒸馏所用教师摘�
 此时 Git 字段为 null，代码哈希仍保存。
 完整训练结束后加载验证最优权重，评估测试集一次并写 result.json；
 短检查只写 check_result.json。检查点不提供中断续训入口。
-教师 checkpoint 内含配置、参数、损失头及优化器状态，不需单独提供教师构造文件。
+本地 teacher 任务的 checkpoint 保存配置、参数、损失头及优化器状态；
+Release 教师附件仅保留推理所需的配置和参数。两者都不需单独提供教师构造文件。
 
 | 路径 | 用途 |
 |---|---|
 | main.py | 统一 JSON 入口 |
 | pld/models.py | DPNN、CNN、MLP |
 | pld/trainers.py | BP、逐块 PLD、验证选模 |
+| pld/staged.py | 固定散斑的 PLD-seq 和 TI-PLD |
 | pld/losses.py | 五种局部损失 |
 | pld/data.py、pld/utils.py | 数据预处理、随机状态和运行记录 |
-| configs/ | 12 份示例 JSON 和字段说明 |
+| configs/ | 14 份示例 JSON 和字段说明 |
 | scripts/ | 数据准备和复现队列 |
 | tests/ | 无真实数据的 CPU/GPU 核心检查及入口回归检查 |
 

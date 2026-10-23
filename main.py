@@ -10,6 +10,7 @@ import torch
 from pld.data import build_loaders
 from pld.models import build_model
 from pld.trainers import BPTrainer, PLDTrainer, fit
+from pld.staged import PLDSequenceTrainer, TeacherInjectionTrainer
 from pld.utils import file_sha256, project_path, provenance, seed_everything, validate_config, write_json
 
 
@@ -25,6 +26,8 @@ def main():
     validate_config(config)
     if args.check_epochs is not None and not 1 <= args.check_epochs <= config["training"]["epochs"]:
         parser.error("--check-epochs must be between 1 and the configured epoch budget")
+    if args.check_epochs is not None and config["task"] in {"pld-seq", "ti-pld"}:
+        parser.error("--check-epochs is not supported for staged training; truncating a stage changes later inputs")
     seed_everything(config["seed"], config.get("threads", 4))
     device = torch.device(config["device"])
     output = project_path(args.output or config["output_dir"])
@@ -41,7 +44,7 @@ def main():
         data_config = dict(config["data"], root=str(project_path(config["data"]["root"])))
         loaders = build_loaders(data_config)
         model = build_model(config["model"])
-        if config["task"] == "pld":
+        if config["task"] in {"pld", "pld-seq", "ti-pld"}:
             path = project_path(config["pld"]["teacher_checkpoint"])
             checkpoint = torch.load(path, map_location="cpu", weights_only=False)
             if checkpoint.get("format_version") != 1:
@@ -55,11 +58,16 @@ def main():
             manifest["teacher_checkpoint_sha256"] = file_sha256(path)
             manifest["teacher_config"] = teacher_config
             write_json(output / "manifest.json", manifest)
-            trainer = PLDTrainer(model, teacher, config["training"], config["pld"],
+            trainer_class = {"pld": PLDTrainer, "pld-seq": PLDSequenceTrainer,
+                             "ti-pld": TeacherInjectionTrainer}[config["task"]]
+            trainer = trainer_class(model, teacher, config["training"], config["pld"],
                                  config["data"]["size"], device)
         else:
             trainer = BPTrainer(model, config["training"], device)
-        fit(trainer, loaders, config, output, check_epochs=args.check_epochs)
+        if config["task"] in {"pld-seq", "ti-pld"}:
+            trainer.fit(loaders, config, output)
+        else:
+            fit(trainer, loaders, config, output, check_epochs=args.check_epochs)
     except BaseException as error:
         write_json(output / "status.json", {"status": "FAILED", "error": repr(error)})
         raise

@@ -37,8 +37,8 @@ class OpticalBlock(nn.Module):
         self.norm = nn.LayerNorm(dim, eps=eps)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, value):
-        """逐样本归一化后计算 |exp(jπαx)T|²，再执行 LN、线性和绝对值。"""
+    def optical(self, value):
+        """仅计算固定光学段的散斑强度，供逐层训练一次采集后复用。"""
         if value.ndim != 4 or tuple(value.shape[1:]) != (1, self.size, self.size):
             raise ValueError("DPNN requires [batch, 1, size, size]")
         if not torch.isfinite(value).all() or (value < 0).any():
@@ -47,9 +47,16 @@ class OpticalBlock(nn.Module):
         normalized = value / torch.where(maximum > 0, maximum, torch.ones_like(maximum))
         field = torch.exp(1j * normalized * self.alpha * torch.pi)
         scattered = torch.einsum("bcm,cmn->bcn", field.flatten(2), self.tm)
-        intensity = scattered.abs().square().flatten(1)
+        return scattered.abs().square().flatten(1)
+
+    def digital(self, intensity):
+        """对散斑执行可训练数字变换，输出下一光学块需要的非负图像。"""
         hidden = F.linear(self.norm(intensity), self.weight, self.bias).abs()
-        return self.dropout(hidden).reshape_as(value)
+        return self.dropout(hidden).reshape(-1, 1, self.size, self.size)
+
+    def forward(self, value):
+        """完整前向仍为光学段后接数字段，参数名称与检查点格式保持一致。"""
+        return self.digital(self.optical(value))
 
 
 class DPNN(BlockNetwork):

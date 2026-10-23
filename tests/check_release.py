@@ -34,7 +34,7 @@ class SyntheticImages:
 
 
 class ReleaseChecks(unittest.TestCase):
-    """覆盖可移植入口、无 Git、数据准备和被移除的损失选项。"""
+    """覆盖可移植入口、无 Git、数据准备和损失选项约束。"""
 
     def test_missing_git_keeps_source_hashes(self):
         """无 Git 可执行文件时仍生成完整源码摘要和依赖记录。"""
@@ -58,12 +58,12 @@ class ReleaseChecks(unittest.TestCase):
     def test_all_example_configs_validate(self):
         """所有公开示例均保留可识别的任务、种子和数据配置。"""
         paths = list((PROJECT_ROOT / "configs").glob("*.json"))
-        self.assertEqual(len(paths), 12)
+        self.assertEqual(len(paths), 14)
         for path in paths:
             validate_config(json.loads(path.read_text()))
 
     def test_teacher_only_cka(self):
-        """CKA 与教师对齐公式相同，拒绝已删除的标签和图像目标。"""
+        """CKA 与教师对齐公式相同，拒绝不支持的标签和图像目标。"""
         x = torch.arange(24, dtype=torch.float32).reshape(4, 6).requires_grad_()
         y = torch.flip(x.detach(), dims=[0])
         loss = FeatureLoss({"type": "cka", "weight_feat": 0.7}, (6,), (6,))

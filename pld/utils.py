@@ -102,8 +102,8 @@ def validate_config(config):
         payload = config if section == "root" else config.get(section, {})
         if set(payload) - allowed:
             raise ValueError(f"Unknown {section} fields: {set(payload) - allowed}")
-    if config["task"] not in {"teacher", "bp", "pld"}:
-        raise ValueError("task must be teacher, bp or pld")
+    if config["task"] not in {"teacher", "bp", "pld", "pld-seq", "ti-pld"}:
+        raise ValueError("task must be teacher, bp, pld, pld-seq or ti-pld")
     if config["data"]["dataset"] not in {"mnist", "fmnist", "cifar10"}:
         raise ValueError("Unknown dataset")
     if config["data"]["size"] != config["model"].get("size", config["data"]["size"]):
@@ -115,6 +115,17 @@ def validate_config(config):
         raise ValueError("early_stopping requires positive min_epochs and patience")
     if config["task"] == "pld" and config["model"]["type"] not in {"dpnn", "mlp"}:
         raise ValueError("PLD students must be DPNN or MLP")
+    if config["task"] in {"pld-seq", "ti-pld"}:
+        if config["model"]["type"] != "dpnn":
+            raise ValueError("Staged distillation requires a DPNN student")
+        if config["data"]["augmentation"]:
+            raise ValueError("Fixed speckle caches require augmentation=[]")
+        expected = "pmse" if config["task"] == "pld-seq" else "mse"
+        losses = config["pld"]["losses"]
+        if len(losses) != config["model"].get("num_blocks", 2) + 1:
+            raise ValueError("One loss is required per hidden block and classifier")
+        if any(loss["type"] != expected for loss in losses[:-1]) or losses[-1]["type"] != "kl_ce":
+            raise ValueError(f"Use {expected} for hidden blocks and kl_ce for the classifier")
     for seed in (config["seed"], config["model"]["init_seed"], config["data"]["shuffle_seed"],
                  config.get("pld", {}).get("projection_seed", 0),
                  config["model"].get("tm_seed", 0)):
